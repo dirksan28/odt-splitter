@@ -23,14 +23,14 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
     file_counter = 1
     
     def sanitize_filename(name):
-        return re.sub(r'[\\/*?:"<>|]', "", name).strip()
+        return re.sub(r'[\\/*?:\s<>|]', "", name).strip()
 
     def save_chapter(counter, heading, content_list):
         if not content_list and (heading == "00_Einleitung" or heading == ""):
             return 
             
         clean_title = sanitize_filename(heading)
-        filename = f"{counter:02d}_{clean_title[:50]}.txt"
+        filename = f"{counter:02d}_{clean_title[:25]}.txt"
         filepath = os.path.join(output_dir, filename)
         
         # 1. Text zusammenfügen
