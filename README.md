@@ -24,6 +24,7 @@ odt-splitter.py datei.odt --no-tables
 | `odt_file` | Path to the `.odt` file (required) | - |
 | `-o, --output` | Output directory for the split text files | `chapter_output` |
 | `--no-tables` | Disable extraction of table content | (enabled by default) |
+| `--heading-level N` | Only split on headings at this outline level or higher (default: 1) | `1` |
 
 ## How it works
 
@@ -32,6 +33,7 @@ The script reads the `.odt` file (which is a zip archive containing XML), extrac
 ### Features:
 
 - **Heading-based splitting**: Automatically detects headings and creates separate files for each section
+- **Heading level filter**: Use `--heading-level N` to only split on headings at outline level N or higher; sub-headings are included as content within the parent chapter
 - **Table support**: By default, table cells are extracted as tab-separated rows within the chapter text
 - **Hard hyphen cleanup**: Removes syllable hyphens at line ends (e.g., "Schreib-\nweise" becomes "Schreibweise")
 - **Soft-hyphen removal**: Strips invisible soft-hyphen characters (`\xad`)

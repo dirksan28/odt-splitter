@@ -4,7 +4,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 import re
 
-def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=True):
+def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=True, heading_level=1):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         
@@ -18,7 +18,7 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
         'table': 'urn:oasis:names:tc:opendocument:xmlns:table:1.0'
     }
     
-    current_heading = "00_Einleitung"
+    current_heading = ""
     current_content = []
     file_counter = 1
     
@@ -26,7 +26,7 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
         return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
     def save_chapter(counter, heading, content_list):
-        if not content_list and heading == "00_Einleitung":
+        if not content_list and (heading == "00_Einleitung" or heading == ""):
             return 
             
         clean_title = sanitize_filename(heading)
@@ -60,16 +60,31 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
             tag_local = element.tag.split('}')[-1] if '}' in element.tag else element.tag
             
             if tag_local == 'h':  
+                # Check outline level - only create new chapter if heading level <= specified level
+                outline_attr = element.get('{urn:oasis:names:tc:opendocument:xmlns:text:1.0}outline-level', '1')
+                try:
+                    heading_outline_level = int(outline_attr)
+                except ValueError:
+                    heading_outline_level = 1
+                
                 # Vorheriges Tabellenende sichern
                 if in_table and current_row_cells:
                     current_content.append("\t".join(current_row_cells))
                     current_row_cells = []
                 in_table = False
                     
-                save_chapter(file_counter, current_heading, current_content)
-                file_counter += 1
-                current_heading = "".join(element.itertext()).strip()
-                current_content = []
+                # Only create new chapter if heading level is within the allowed range
+                if heading_outline_level <= heading_level:
+                    save_chapter(file_counter, current_heading, current_content)
+                    file_counter += 1
+                    current_heading = "".join(element.itertext()).strip()
+                    current_content = []
+                else:
+                    # Heading level too deep - add its text as paragraph content
+                    text = "".join(element.itertext()).strip()
+                    if text:  
+                        current_content.append(text)
+                    # Keep current heading unchanged (sub-heading becomes part of current chapter)
                 
             elif tag_local == 'p':  
                 # Wenn in Tabelle: parallele p-Elemente sind Doppelte – überspringen
@@ -111,5 +126,6 @@ if __name__ == "__main__":
     parser.add_argument('odt_file', help='Path to the .odt file')
     parser.add_argument('-o', '--output', default='chapter_output', help='Output directory (default: chapter_output)')
     parser.add_argument('--no-tables', action='store_true', help='Disable table content extraction')
+    parser.add_argument('--heading-level', type=int, default=1, help='Only split on headings at this outline level or higher (default: 1)')
     args = parser.parse_args()
-    split_odt_by_headings(args.odt_file, args.output, include_tables=not args.no_tables)
+    split_odt_by_headings(args.odt_file, args.output, include_tables=not args.no_tables, heading_level=args.heading_level)
