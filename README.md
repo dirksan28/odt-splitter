@@ -24,6 +24,7 @@ odt-splitter.py datei.odt --no-tables
 | `odt_file` | Path to the `.odt` file (required) | - |
 | `-o, --output` | Output directory for the split text files | `chapter_output` |
 | `--no-tables` | Disable extraction of table content | (enabled by default) |
+| `--no-footnotes` | Include footnote content in output (default: footnotes suppressed) | (suppressed by default) |
 | `--heading-level N` | Only split on headings at this outline level or higher (default: 1) | `1` |
 
 ## How it works

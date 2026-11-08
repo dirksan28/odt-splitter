@@ -4,7 +4,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 import re
 
-def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=True, heading_level=1):
+def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=True, heading_level=1, suppress_footnotes=True):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         
@@ -58,6 +58,12 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
     for body in root.findall('.//text:heading-list', namespaces) or [root]:
         for element in root.iter():
             tag_local = element.tag.split('}')[-1] if '}' in element.tag else element.tag
+            
+            # Fußnoten unterdrücken (Standardverhalten)
+            if suppress_footnotes:
+                footnote_tags = {'footnote', 'footnote-body'}
+                if tag_local in footnote_tags:
+                    continue
             
             if tag_local == 'h':  
                 # Check outline level - only create new chapter if heading level <= specified level
@@ -126,6 +132,7 @@ if __name__ == "__main__":
     parser.add_argument('odt_file', help='Path to the .odt file')
     parser.add_argument('-o', '--output', default='chapter_output', help='Output directory (default: chapter_output)')
     parser.add_argument('--no-tables', action='store_true', help='Disable table content extraction')
+    parser.add_argument('--no-footnotes', action='store_true', help='Include footnote content in output (default: footnotes suppressed)')
     parser.add_argument('--heading-level', type=int, default=1, help='Only split on headings at this outline level or higher (default: 1)')
     args = parser.parse_args()
-    split_odt_by_headings(args.odt_file, args.output, include_tables=not args.no_tables, heading_level=args.heading_level)
+    split_odt_by_headings(args.odt_file, args.output, include_tables=not args.no_tables, heading_level=args.heading_level, suppress_footnotes=not args.no_footnotes)
