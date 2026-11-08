@@ -1,0 +1,9 @@
+# Ignore ODT files
+*.odt
+
+# Ignore text output files
+*.txt
+
+# Ignore output directories
+kapitel_output/
+testdir/
