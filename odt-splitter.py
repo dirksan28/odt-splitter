@@ -4,19 +4,106 @@ import zipfile
 import xml.etree.ElementTree as ET
 import re
 
+NS_TEXT = 'urn:oasis:names:tc:opendocument:xmlns:text:1.0'
+NS_STYLE = 'urn:oasis:names:tc:opendocument:xmlns:style:1.0'
+NS_FO = 'urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0'
+
+def local_name(tag):
+    return tag.split('}')[-1] if '}' in tag else tag
+
+def collect_style_info(style_roots):
+    parents = {}
+    margins = {}
+    outline_levels = {}
+
+    for root in style_roots:
+        if root is None:
+            continue
+        for style in root.iter(f'{{{NS_STYLE}}}style'):
+            if style.get(f'{{{NS_STYLE}}}family') != 'paragraph':
+                continue
+            name = style.get(f'{{{NS_STYLE}}}name')
+            parents[name] = style.get(f'{{{NS_STYLE}}}parent-style-name')
+            props = style.find(f'{{{NS_STYLE}}}paragraph-properties')
+            if props is None:
+                continue
+            margin = props.get(f'{{{NS_FO}}}margin-left')
+            if margin is not None:
+                margins[name] = margin
+            outline = props.get(f'{{{NS_TEXT}}}outline-level')
+            if outline is not None:
+                outline_levels[name] = outline
+
+    def effective(name, values):
+        seen = set()
+        while name and name not in seen:
+            seen.add(name)
+            if name in values:
+                return values[name]
+            name = parents.get(name)
+        return None
+
+    return (
+        lambda name: effective(name, margins),
+        lambda name: effective(name, outline_levels),
+    )
+
+def walk_paragraphs(element, in_table=False):
+    tag = local_name(element.tag)
+    inside_table = in_table or tag in ('table', 'table-cell')
+    for child in element:
+        yield from walk_paragraphs(child, inside_table)
+    if tag == 'p':
+        yield element, in_table
+
 def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=True, heading_level=1, suppress_footnotes=True):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         
     with zipfile.ZipFile(odt_path, 'r') as z:
         content_xml = z.read('content.xml')
+        try:
+            styles_xml = z.read('styles.xml')
+        except KeyError:
+            styles_xml = None
         
     root = ET.fromstring(content_xml)
-    
-    namespaces = {
-        'text': 'urn:oasis:names:tc:opendocument:xmlns:text:1.0',
-        'table': 'urn:oasis:names:tc:opendocument:xmlns:table:1.0'
-    }
+    styles_root = ET.fromstring(styles_xml) if styles_xml else None
+    get_margin, get_outline_level = collect_style_info([styles_root, root])
+
+    # Some ODT files (e.g. exported/edited documents) do not use real heading
+    # elements at all. In that case fall back to numbered paragraphs such as
+    # "1. Title" or "2.1 Subtitle" that are not indented (TOC entries and
+    # numbered list items are usually indented).
+    style_heading_levels = {}
+    fallback_heading_levels = {}
+    has_native_headings = any(local_name(e.tag) == 'h' for e in root.iter())
+
+    for paragraph, in_table in walk_paragraphs(root):
+        if in_table:
+            continue
+        style_name = paragraph.get(f'{{{NS_TEXT}}}style-name')
+        outline = get_outline_level(style_name)
+        if outline is not None:
+            try:
+                style_heading_levels[id(paragraph)] = int(outline)
+            except ValueError:
+                pass
+
+    if not has_native_headings and not style_heading_levels:
+        for paragraph, in_table in walk_paragraphs(root):
+            if in_table:
+                continue
+            text = "".join(paragraph.itertext())
+            match = re.match(r'^\s*(\d+(?:\.\d+)*)\.?\s+\S', text)
+            if not match:
+                continue
+            if any(local_name(e.tag) == 'tab' for e in paragraph.iter()):
+                continue
+            margin = get_margin(paragraph.get(f'{{{NS_TEXT}}}style-name'))
+            if margin not in (None, '0', '0cm', '0in', '0pt'):
+                continue
+            fallback_heading_levels[id(paragraph)] = match.group(1).count('.') + 1
     
     current_heading = ""
     current_content = []
@@ -55,70 +142,70 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
     current_row_cells = []
 
     # Durchsuche das Dokument chronologisch
-    for body in root.findall('.//text:heading-list', namespaces) or [root]:
-        for element in root.iter():
-            tag_local = element.tag.split('}')[-1] if '}' in element.tag else element.tag
-            
-            # Fußnoten unterdrücken (Standardverhalten)
-            if suppress_footnotes:
-                footnote_tags = {'footnote', 'footnote-body'}
-                if tag_local in footnote_tags:
-                    continue
-            
-            if tag_local == 'h':  
-                # Check outline level - only create new chapter if heading level <= specified level
-                outline_attr = element.get('{urn:oasis:names:tc:opendocument:xmlns:text:1.0}outline-level', '1')
-                try:
-                    heading_outline_level = int(outline_attr)
-                except ValueError:
-                    heading_outline_level = 1
+    for element in root.iter():
+        tag_local = local_name(element.tag)
+        
+        # Fußnoten unterdrücken (Standardverhalten)
+        if suppress_footnotes:
+            footnote_tags = {'footnote', 'footnote-body'}
+            if tag_local in footnote_tags:
+                continue
+
+        heading_outline_level = None
+        if tag_local == 'h':
+            # Check outline level - only create new chapter if heading level <= specified level
+            outline_attr = element.get(f'{{{NS_TEXT}}}outline-level', '1')
+            try:
+                heading_outline_level = int(outline_attr)
+            except ValueError:
+                heading_outline_level = 1
+        elif tag_local == 'p':
+            heading_outline_level = (
+                fallback_heading_levels.get(id(element))
+                or style_heading_levels.get(id(element))
+            )
+
+        if heading_outline_level is not None:
+            # Vorheriges Tabellenende sichern
+            if in_table and current_row_cells:
+                current_content.append("\t".join(current_row_cells))
+                current_row_cells = []
+            in_table = False
                 
-                # Vorheriges Tabellenende sichern
-                if in_table and current_row_cells:
-                    current_content.append("\t".join(current_row_cells))
-                    current_row_cells = []
-                in_table = False
-                    
-                # Only create new chapter if heading level is within the allowed range
-                if heading_outline_level <= heading_level:
-                    save_chapter(file_counter, current_heading, current_content)
-                    file_counter += 1
-                    current_heading = "".join(element.itertext()).strip()
-                    current_content = []
-                else:
-                    # Heading level too deep - add its text as paragraph content
-                    text = "".join(element.itertext()).strip()
-                    if text:  
-                        current_content.append(text)
-                    # Keep current heading unchanged (sub-heading becomes part of current chapter)
-                
-            elif tag_local == 'p':  
-                # Wenn in Tabelle: parallele p-Elemente sind Doppelte – überspringen
-                # aber nicht den Tabellen-Zustand zurücksetzen
-                if in_table:
-                    continue
-                
-                # Vorheriges Tabellenende sichern (außerhalb von Tabellen)
-                if in_table and current_row_cells:
-                    current_content.append("\t".join(current_row_cells))
-                    current_row_cells = []
-                in_table = False
-                    
+            # Only create new chapter if heading level is within the allowed range
+            if heading_outline_level <= heading_level:
+                save_chapter(file_counter, current_heading, current_content)
+                file_counter += 1
+                current_heading = "".join(element.itertext()).strip()
+                current_content = []
+            else:
+                # Heading level too deep - add its text as paragraph content
                 text = "".join(element.itertext()).strip()
                 if text:  
                     current_content.append(text)
+                # Keep current heading unchanged (sub-heading becomes part of current chapter)
             
-            elif tag_local == 'table-row' and include_tables:
-                # Vorherige Zeile sichern
-                if current_row_cells:
-                    current_content.append("\t".join(current_row_cells))
-                    current_row_cells = []
-                in_table = True
+        elif tag_local == 'p':  
+            # Wenn in Tabelle: parallele p-Elemente sind Doppelte – überspringen
+            # aber nicht den Tabellen-Zustand zurücksetzen
+            if in_table:
+                continue
                 
-            elif tag_local == 'table-cell' and include_tables:
-                cell_text = "".join(element.itertext()).strip()
-                if cell_text:
-                    current_row_cells.append(cell_text)
+            text = "".join(element.itertext()).strip()
+            if text:  
+                current_content.append(text)
+        
+        elif tag_local == 'table-row' and include_tables:
+            # Vorherige Zeile sichern
+            if current_row_cells:
+                current_content.append("\t".join(current_row_cells))
+                current_row_cells = []
+            in_table = True
+            
+        elif tag_local == 'table-cell' and include_tables:
+            cell_text = "".join(element.itertext()).strip()
+            if cell_text:
+                current_row_cells.append(cell_text)
 
     # Letztes Kapitel abspeichern
     save_chapter(file_counter, current_heading, current_content)

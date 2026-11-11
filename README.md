@@ -15,6 +15,18 @@ odt-splitter.py datei.odt -o meine_ausgabe
 
 # Disable table content extraction
 odt-splitter.py datei.odt --no-tables
+
+# Keep the whole document in one file (no splitting)
+odt-splitter.py datei.odt --heading-level 0
+```
+
+Set `--heading-level 0` to disable splitting. All headings are then kept as
+regular text and the entire document is written to a single `01_.txt` file.
+Clear old output files first so no stale chapter files remain:
+
+```bash
+rm chapter_output/*.txt
+odt-splitter.py datei.odt --heading-level 0
 ```
 
 ### Arguments:
@@ -25,7 +37,7 @@ odt-splitter.py datei.odt --no-tables
 | `-o, --output` | Output directory for the split text files | `chapter_output` |
 | `--no-tables` | Disable extraction of table content | (enabled by default) |
 | `--no-footnotes` | Include footnote content in output (default: footnotes suppressed) | (suppressed by default) |
-| `--heading-level N` | Only split on headings at this outline level or higher (default: 1) | `1` |
+| `--heading-level N` | Only split on headings at this outline level or higher; use `0` to disable splitting | `1` |
 
 ## How it works
 
@@ -34,6 +46,7 @@ The script reads the `.odt` file (which is a zip archive containing XML), extrac
 ### Features:
 
 - **Heading-based splitting**: Automatically detects headings and creates separate files for each section
+- **Fallback for missing heading styles**: If an ODT has no real heading elements, numbered paragraphs like `1. Title` and `2.1 Subtitle` are used as headings
 - **Heading level filter**: Use `--heading-level N` to only split on headings at outline level N or higher; sub-headings are included as content within the parent chapter
 - **Table support**: By default, table cells are extracted as tab-separated rows within the chapter text
 - **Hard hyphen cleanup**: Removes syllable hyphens at line ends (e.g., "Schreib-\nweise" becomes "Schreibweise")
@@ -51,4 +64,7 @@ odt-splitter.py bach.odt -o my_chapters
 
 # Disable table content extraction
 odt-splitter.py bach.odt --no-tables
+
+# Keep the whole document in a single file
+odt-splitter.py bach.odt --heading-level 0
 ```
