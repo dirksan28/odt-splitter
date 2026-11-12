@@ -11,6 +11,37 @@ NS_FO = 'urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0'
 def local_name(tag):
     return tag.split('}')[-1] if '}' in tag else tag
 
+def element_text(element):
+    """Return an element's text, preserving inline whitespace markers.
+
+    Plain itertext() silently drops <text:tab/>, <text:s/> and
+    <text:line-break/>, which glues TOC page numbers to the preceding word.
+    """
+    parts = []
+
+    def recurse(el):
+        tag = local_name(el.tag)
+        if tag == 'tab':
+            parts.append('\t')
+        elif tag == 's':
+            try:
+                count = int(el.get(f'{{{NS_TEXT}}}c', '1'))
+            except ValueError:
+                count = 1
+            parts.append(' ' * count)
+        elif tag == 'line-break':
+            parts.append('\n')
+        else:
+            if el.text:
+                parts.append(el.text)
+            for child in el:
+                recurse(child)
+                if child.tail:
+                    parts.append(child.tail)
+
+    recurse(element)
+    return ''.join(parts)
+
 def collect_style_info(style_roots):
     parents = {}
     margins = {}
@@ -48,6 +79,24 @@ def collect_style_info(style_roots):
         lambda name: effective(name, outline_levels),
     )
 
+def remove_footnotes(root):
+    """Detach footnote elements (including their bodies) from the tree.
+
+    Footnote text lives inside <text:note><text:note-body>…</text:note-body>
+    </text:note>. Removing the whole note element ensures neither the footnote
+    text nor its citation leaks into the surrounding paragraph via itertext().
+    """
+    def recurse(element):
+        for child in list(element):
+            if local_name(child.tag) in ('note', 'footnote'):
+                note_class = child.get(f'{{{NS_TEXT}}}note-class', 'footnote')
+                if note_class == 'footnote':
+                    element.remove(child)
+                    continue
+            recurse(child)
+
+    recurse(root)
+
 def walk_paragraphs(element, in_table=False):
     tag = local_name(element.tag)
     inside_table = in_table or tag in ('table', 'table-cell')
@@ -68,6 +117,8 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
             styles_xml = None
         
     root = ET.fromstring(content_xml)
+    if suppress_footnotes:
+        remove_footnotes(root)
     styles_root = ET.fromstring(styles_xml) if styles_xml else None
     get_margin, get_outline_level = collect_style_info([styles_root, root])
 
@@ -94,7 +145,7 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
         for paragraph, in_table in walk_paragraphs(root):
             if in_table:
                 continue
-            text = "".join(paragraph.itertext())
+            text = element_text(paragraph)
             match = re.match(r'^\s*(\d+(?:\.\d+)*)\.?\s+\S', text)
             if not match:
                 continue
@@ -145,12 +196,6 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
     for element in root.iter():
         tag_local = local_name(element.tag)
         
-        # Fußnoten unterdrücken (Standardverhalten)
-        if suppress_footnotes:
-            footnote_tags = {'footnote', 'footnote-body'}
-            if tag_local in footnote_tags:
-                continue
-
         heading_outline_level = None
         if tag_local == 'h':
             # Check outline level - only create new chapter if heading level <= specified level
@@ -176,11 +221,11 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
             if heading_outline_level <= heading_level:
                 save_chapter(file_counter, current_heading, current_content)
                 file_counter += 1
-                current_heading = "".join(element.itertext()).strip()
+                current_heading = element_text(element).strip()
                 current_content = []
             else:
                 # Heading level too deep - add its text as paragraph content
-                text = "".join(element.itertext()).strip()
+                text = element_text(element).strip()
                 if text:  
                     current_content.append(text)
                 # Keep current heading unchanged (sub-heading becomes part of current chapter)
@@ -191,7 +236,7 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
             if in_table:
                 continue
                 
-            text = "".join(element.itertext()).strip()
+            text = element_text(element).strip()
             if text:  
                 current_content.append(text)
         
@@ -203,7 +248,7 @@ def split_odt_by_headings(odt_path, output_dir="chapter_output", include_tables=
             in_table = True
             
         elif tag_local == 'table-cell' and include_tables:
-            cell_text = "".join(element.itertext()).strip()
+            cell_text = element_text(element).strip()
             if cell_text:
                 current_row_cells.append(cell_text)
 
